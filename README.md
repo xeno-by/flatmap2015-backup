@@ -1,3 +1,4 @@
-### scaladays2015
+### sbt demo
 
-Hosts demos prepared for a ScalaDays talk (17 Mar 2015) and a Scala Bay meetup (19 Mar 2015).
+This demo has become possible thanks to the work of Martin Duhem during his semester projects at EPFL:
+[Making sbt Macro-Aware](http://infoscience.epfl.ch/record/200051) and [Macros in sbt: Problem Solved!](http://infoscience.epfl.ch/record/204855).
