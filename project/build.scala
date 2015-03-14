@@ -18,6 +18,9 @@ object build extends Build {
     base = file("core")
   ) settings (
     sharedSettings : _*
+  ) settings (
+    addCompilerPlugin("org.scalamacros" % "macrotracker" % "0.1.0" cross CrossVersion.full),
+    incOptions := incOptions.value.withNameHashing(true)
   ) dependsOn (macros)
 
   lazy val macros = Project(
