@@ -8,21 +8,19 @@ package adt {
     implicit def materialize[T]: Adt[T] = macro {
       T match {
         case ref: Type.Ref =>
-          def validateLeaf(leaf: Member) = {
-            if (!leaf.isFinal) abort(s"${leaf.name} is not final")
-            if (!leaf.isCase) abort(s"${leaf.name} is not sealed")
-            if (!leaf.tparams.isEmpty) abort(s"${leaf.name} is not monomorphic")
+          def validate(defn: Member): Unit = {
+            def isEffectivelyFinal(defn: Member): Boolean = {
+              if (defn.isFinal) true
+              else if (defn.isSealed) defn.children.forall(x => x.isFinal)
+              else false
+            }
+            if (!isEffectivelyFinal(defn)) abort(s"${defn.name} is not a final class/object or a sealed parent of final classes/objects")
+            val cases = (defn +: defn.children).filter(x => x.isFinal)
+            cases.filter(x => !x.isCase).foreach(x => abort(s"${x.name} is not a case class or a case object"))
+            cases.filter(x => !x.tparams.isEmpty).foreach(x => abort(s"${x.name} is not monomorphic"))
           }
-          val defn = ref.defn
-          if (defn.isClass || defn.isObject) {
-            validateLeaf(defn)
-          } else if (defn.isTrait) {
-            if (defn.isSealed) defn.children.foreach(validateLeaf)
-            else abort(s"${defn.name} is not sealed")
-          } else {
-            abort(s"unsupported ref to ${defn.name}")
-          }
-          q"new Adt[$T]{}"
+          validate(ref.defn)
+          q"new _root_.adt.Adt[$T]{}"
         case _ =>
           abort(s"unsupported type $T")
       }
@@ -39,47 +37,37 @@ package serialization {
     implicit def materialize[T: adt.Adt]: Serializer[T] = macro {
       T match {
         case ref: Type.Ref =>
-          val defn = ref.defn
-          if (defn.isClass || defn.isTrait || defn.isObject) {
-            val serializer = Term.fresh(defn.name + "Serializer")
-            val input = Term.fresh("input")
-            val body = {
-              def serializer(defn: Member, input: Term.Name, tagged: Boolean) = {
-                val fields = defn.ctor.params.map(x => x.field)
-                var entries: Seq[Term] = fields.map { field =>
-                  q""" "\"" + ${field.name.toString} + "\": " + serialize($input.${field.name}) """
-                }
+          def serializerFor(defn: Member, x: Term.Name, tagged: Boolean): Term = {
+            if (defn.isFinal) {
+              val serializedTag = {
                 if (tagged) {
                   val tag = defn.parents.head.children.indexOf(defn).toString
-                  entries = entries :+ q""" "$$tag: " + $tag """
+                  q"""${"$tag"} + ": " + $tag"""
+                } else {
+                  q""" "" """
                 }
-                val unwrappedResult = entries.foldLeft(None: Option[Term]) { (acc, curr) =>
-                  acc.map(acc => q"""$acc + ", " + $curr""").orElse(Some(curr))
-                }
-                val contents = unwrappedResult.getOrElse(q""" "" """)
-                q""" "{" + $contents + "}" """
               }
-              if (defn.isClass) {
-                serializer(defn, input, tagged = false)
-              } else if (defn.isObject) {
-                serializer(defn, input, tagged = false)
-              } else if (defn.isTrait) {
-                val refined = Pat.fresh("input")
-                val clauses = defn.children.map(leaf => p"case $refined: ${leaf.tpe.pat} => ${serializer(leaf, refined.name, tagged = true)}")
-                q"$input match { ..$clauses }"
-              } else {
-                abort(s"unsupported ref to ${defn.name}")
-              }
+              val fields = defn.ctor.params.map(x => x.field)
+              val serializedFields = fields.map(f => q"""${f.name.toString} + ": " + _root_.serialization.serialize($x.${f.name})""")
+              val payload = serializedFields.foldLeft(serializedTag)((acc, curr) => q"""$acc + ", " + $curr""")
+              q""" "{ " + $payload + " }" """
+            } else {
+              val cases = defn.children.map(child => {
+                val x = Pat.fresh("x")
+                p"case $x: ${child.tpe.pat} => ${serializerFor(child, x.name, tagged = true)}"
+              })
+              q"$x match { ..$cases }"
             }
-            q"""
-              implicit object $serializer extends Serializer[$T] {
-                def apply($input: $T): String = $body
-              }
-              $serializer
-            """
-          } else {
-            abort(s"unsupported ref to ${defn.name}")
           }
+          val x = Term.fresh("x")
+          val name = Term.fresh("Serializer")
+          val body = serializerFor(ref.defn, x, tagged = false)
+          q"""
+            implicit object $name extends _root_.serialization.Serializer[$T] { 
+              def apply($x: $T): _root_.scala.Predef.String = $body
+            }
+            $name
+          """
         case _ =>
           abort(s"unsupported type $T")
       }
